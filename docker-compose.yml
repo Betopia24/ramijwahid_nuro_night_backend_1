@@ -1,5 +1,5 @@
 version: '3.8'
-
+ 
 services:
   # PostgreSQL Database
   postgres:
@@ -14,7 +14,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d
     ports:
-      - "5433:5432"   # 👈 host 5433 → container 5432
+      - "5439:5432"   # 👈 Changed to an unused host port
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -22,13 +22,13 @@ services:
       retries: 5
     networks:
       - legal_advocacy_network
-
+ 
   # Redis for caching
   redis:
     image: redis:7-alpine
     container_name: legal_advocacy_redis
     ports:
-      - "6380:6379"   # 👈 host 6380 → container 6379
+      - "6380:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -38,7 +38,7 @@ services:
       retries: 5
     networks:
       - legal_advocacy_network
-
+ 
   # FastAPI Application
   api:
     build:
@@ -46,24 +46,15 @@ services:
       dockerfile: Dockerfile
     container_name: legal_advocacy_api
     environment:
-      # Database
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres123}@postgres:5432/legal_advocacy
-      # 👆 inside containers, they connect via service name "postgres" on port 5432
-      # so you don't need to change this if you only changed the host mapping
-      
-      # OpenAI
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      
-      # Cloudinary
       CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME}
       CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY}
       CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET}
-      
-      # API Configuration
       API_HOST: 0.0.0.0
       API_PORT: 8000
     ports:
-      - "8000:8000"
+      - "8003:8000" # Note: Port 8000 is also in use by another container (id_photo_api). This will be your next error. Consider changing it to 8001:8000
     volumes:
       - audio_files:/app/audio_files
       - ./logs:/app/logs
@@ -81,3 +72,14 @@ services:
     restart: unless-stopped
     networks:
       - legal_advocacy_network
+ 
+# Top-level declaration for networks
+networks:
+  legal_advocacy_network:
+    driver: bridge
+ 
+# Top-level declaration for named volumes
+volumes:
+  postgres_data:
+  redis_data:
+  audio_files:

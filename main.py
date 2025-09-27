@@ -13,6 +13,12 @@ from models import AudioGenerationResponse, GradingReport, EvaluationResponse
 
 app = FastAPI()
 
+
+@app.get("/")
+async def root():
+    return {"message": "Server is running fine!"}
+
+
 @app.post("/speech/generate-from-scenario", response_model=AudioGenerationResponse)
 async def generate_audio_from_scenario_endpoint(scenario_id: str):
     try:
