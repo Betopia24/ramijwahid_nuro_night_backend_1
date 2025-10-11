@@ -32,9 +32,7 @@ async def generate_audio_from_scenario_endpoint(scenario_id: str):
             pdf_url = speech_data['fileUrl']
         except (KeyError, IndexError) as e:
             raise HTTPException(status_code=400, detail="Invalid scenario data structure")
-        
-        speech_data = scenario_data[0]['speech']
-        pdf_url = speech_data['fileUrl']
+
         
         result = generate_audio_from_pdf(scenario_id, pdf_url)
         
