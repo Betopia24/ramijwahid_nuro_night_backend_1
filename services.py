@@ -11,6 +11,7 @@ import config
 import mimetypes
 from typing import Optional
 
+from langdetect import detect, LangDetectException
 
 import os
 from dotenv import load_dotenv
@@ -229,6 +230,7 @@ def generate_audio_from_pdf(scenario_id, pdf_url):
 
 
 def transcribe_audio_from_url(audio_bytes: bytes):
+    temp_audio_path = None
     try:
         # Initialize OpenAI client
         client = openai.OpenAI(api_key=config.OPENAI_API_KEY)
@@ -248,6 +250,28 @@ def transcribe_audio_from_url(audio_bytes: bytes):
 
         # Convert transcription object to dict
         transcription_dict = transcription.model_dump()
+        text = transcription_dict.get("text", "").strip()
+
+        # ✅ Empty check
+        if not text:
+            raise HTTPException(status_code=400, detail="Transcription is empty or failed. Please upload a valid audio file.")
+
+        # ✅ Minimum length check (at least 200 characters)
+        if len(text) < 200:
+            raise HTTPException(status_code=400, detail="Transcription too short. Please upload a longer audio (at least 200 characters).")
+
+        try:
+            detected_lang = detect(text)
+            if detected_lang != "en":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Detected non-English language: {detected_lang}. Please submit English audio."
+                )
+        except LangDetectException:
+            raise HTTPException(
+                status_code=400,
+                detail="Unable to detect language. Please provide clear English audio."
+            )
 
         # Only keep desired structure
         structured_output = {
@@ -257,12 +281,27 @@ def transcribe_audio_from_url(audio_bytes: bytes):
 
         return structured_output
 
+    except HTTPException:
+        # Re-raise HTTPException so validation errors propagate
+        raise
     except requests.RequestException as e:
         print(f"Failed to download audio: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to download audio: {str(e)}")
     except FileNotFoundError:
-        print(f"Audio file not found: {temp_audio_path}")
+        print(f"Audio file not found")
+        raise HTTPException(status_code=500, detail="Audio file not found")
     except Exception as e:
         print(f"Transcription failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+    finally:
+        # Clean up temp file
+        if temp_audio_path and os.path.exists(temp_audio_path):
+            try:
+                os.unlink(temp_audio_path)
+            except Exception as e:
+                print(f"Failed to delete temp file: {e}")
+
+
 
 def process_pdf_for_instructions(scenario_id):
     from database import get_pdfUrl_according_to_scenario

@@ -64,6 +64,10 @@ async def evaluate_submission_endpoint(
         # Read uploaded file content
         contents = await audio_file.read()
 
+        # Validate file existence and non-empty content
+        if not contents:
+            raise HTTPException(status_code=400, detail="No audio file provided or file is empty")
+
         transcription = transcribe_audio_from_url(contents)
         isinstance = process_pdf_for_instructions(scenario_id)
 

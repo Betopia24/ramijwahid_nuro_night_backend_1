@@ -228,8 +228,42 @@ def get_pdfUrl_according_to_scenario(scenario_id):
 #     return result
 
 # # Example usage
-# print(get_user_id_according_to_scenario_id("1916acd4-b1fc-46d0-8ee1-389ced21a652"))
+# print(get_user_id_according_to_scenario_id("7f901dc6-6bc2-4283-97ac-a66c457ebe4d"))
 
 
 
 
+
+
+
+
+
+# def get_all_submissions(limit: int = 10) -> Optional[List[Dict]]:
+#     """
+#     Retrieve recent submissions from the 'Submission' table for verification.
+
+#     Args:
+#         limit (int): Number of recent records to fetch (default = 10)
+
+#     Returns:
+#         List[Dict]: A list of submission records (if found)
+#     """
+#     query = f"""
+#     SELECT 
+#         "id", 
+#         "userId", 
+#         "scenarioId", 
+#         "totalScore", 
+#         "positive", 
+#         "negative", 
+#         "improvement", 
+#         "status", 
+#         "createdAt", 
+#         "updatedAt"
+#     FROM "Submission"
+#     ORDER BY "createdAt" DESC
+#     LIMIT %s
+#     """
+#     return get_data_from_db(query, (limit,))
+
+# print(get_all_submissions())
