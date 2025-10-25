@@ -256,10 +256,7 @@ def transcribe_audio_from_url(audio_bytes: bytes):
         if not text:
             raise HTTPException(status_code=400, detail="Transcription is empty or failed. Please upload a valid audio file.")
 
-        # ✅ Minimum length check (at least 200 characters)
-        if len(text) < 200:
-            raise HTTPException(status_code=400, detail="Transcription too short. Please upload a longer audio (at least 200 characters).")
-
+        
         try:
             detected_lang = detect(text)
             if detected_lang != "en":
