@@ -257,18 +257,18 @@ def transcribe_audio_from_url(audio_bytes: bytes):
             raise HTTPException(status_code=400, detail="Transcription is empty or failed. Please upload a valid audio file.")
 
         
-        try:
-            detected_lang = detect(text)
-            if detected_lang != "en":
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Detected non-English language: {detected_lang}. Please submit English audio."
-                )
-        except LangDetectException:
-            raise HTTPException(
-                status_code=400,
-                detail="Unable to detect language. Please provide clear English audio."
-            )
+        # try:
+        #     detected_lang = detect(text)
+        #     if detected_lang != "en":
+        #         raise HTTPException(
+        #             status_code=400,
+        #             detail=f"Detected non-English language: {detected_lang}. Please submit English audio."
+        #         )
+        # except LangDetectException:
+        #     raise HTTPException(
+        #         status_code=400,
+        #         detail="Unable to detect language. Please provide clear English audio."
+        #     )
 
         # Only keep desired structure
         structured_output = {
