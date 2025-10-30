@@ -2,9 +2,11 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List
 
+class AudioGenerationRequest(BaseModel):
+    pdf_url: str
+
 class AudioGenerationResponse(BaseModel):
     message: str
-    scenario_id: str
     cloudinary_url: str 
     status: str
 
@@ -16,5 +18,7 @@ class GradingReport(BaseModel):
 
 class EvaluationResponse(BaseModel):
     message: str
-    user_id: str
-    submission_id: str
+    total_score: float
+    positive: Optional[List[str]] = None
+    negative: Optional[List[str]] = None
+    improvement: Optional[List[str]] = None

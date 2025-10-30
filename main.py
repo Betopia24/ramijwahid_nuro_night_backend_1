@@ -2,16 +2,25 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse
 import config
-from database import get_scenario_by_id, upload_submission_to_db
+# from database import upload_submission_to_db
 from services import (
     generate_audio_from_pdf, 
     transcribe_audio_from_url, 
     process_pdf_for_instructions, 
     report
 )
-from models import AudioGenerationResponse, GradingReport, EvaluationResponse
+from models import AudioGenerationRequest, AudioGenerationResponse, GradingReport, EvaluationResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],   # Allow all HTTP methods
+    allow_headers=["*"],   # Allow all headers
+)
 
 
 @app.get("/")
@@ -19,44 +28,38 @@ async def root():
     return {"message": "Server is running fine!"}
 
 
+
 @app.post("/speech/generate-from-scenario", response_model=AudioGenerationResponse)
-async def generate_audio_from_scenario_endpoint(scenario_id: str):
+async def generate_audio_from_scenario_endpoint(request: AudioGenerationRequest):
     try:
-        scenario_data = get_scenario_by_id(scenario_id)
-        
-        if not scenario_data or len(scenario_data) == 0:
-            raise HTTPException(status_code=404, detail="Scenario not found")
+        pdf_url = request.pdf_url
 
-        try:
-            speech_data = scenario_data[0]['speech']
-            pdf_url = speech_data['fileUrl']
-        except (KeyError, IndexError) as e:
-            raise HTTPException(status_code=400, detail="Invalid scenario data structure")
 
-        
-        result = generate_audio_from_pdf(scenario_id, pdf_url)
-        
+        # if not pdf_url or not pdf_url.endswith(".pdf"):
+        #     raise HTTPException(status_code=400, detail="Invalid or missing PDF URL")
+
+        # Pass PDF URL directly to your audio generation logic
+        result = generate_audio_from_pdf(pdf_url)
+
         return AudioGenerationResponse(
-            message="Audio generated from scenario successfully",
-            scenario_id=result["scenario_id"],
+            message="Audio generated successfully",
             cloudinary_url=result["cloudinary_url"],
-            status="Database updated"
+            status="completed"
         )
-        
+
     except HTTPException:
-    # Re-raise HTTP exceptions (like 404) without modification
         raise
     except Exception as e:
-        # Log the actual error for debugging
         print(f"Unexpected error: {e}")
         error_msg = str(e) if str(e) else "An unexpected error occurred"
         raise HTTPException(status_code=500, detail=error_msg)
+
+
     
 
 @app.post("/grade/evaluate-submission", response_model=EvaluationResponse)
 async def evaluate_submission_endpoint(
-    scenario_id: str,
-    user_id: str,
+    pdf_url: str,
     audio_file: UploadFile = File(...)
 ):
     """Evaluate uploaded audio submission against PDF instructions"""
@@ -69,7 +72,9 @@ async def evaluate_submission_endpoint(
             raise HTTPException(status_code=400, detail="No audio file provided or file is empty")
 
         transcription = transcribe_audio_from_url(contents)
-        isinstance = process_pdf_for_instructions(scenario_id)
+        isinstance = process_pdf_for_instructions(pdf_url)
+
+
 
         if not isinstance:
             raise HTTPException(status_code=404, detail="No instructions found for scenario")
@@ -90,18 +95,16 @@ async def evaluate_submission_endpoint(
         negatives_str = "\n".join(negatives)
         improvements_str = "\n".join(improvements)
 
-        id = upload_submission_to_db(user_id, scenario_id, total_score, positives_str, negatives_str, improvements_str)
-
-
-        if not id:  
-            raise HTTPException(status_code=500, detail="Failed to save submission to database")
-
-        return EvaluationResponse(
-            message="database updated",
-            user_id=user_id,
-            submission_id=id
-        )
     
+
+        return {
+            "message": "Evaluation completed successfully",
+            "total_score": total_score,
+            "positive": positives,
+            "negative": negatives,
+            "improvement": improvements
+        }
+            
     except ValueError as ve:
     # Handle database constraint violations and validation errors
         raise HTTPException(status_code=400, detail=str(ve))

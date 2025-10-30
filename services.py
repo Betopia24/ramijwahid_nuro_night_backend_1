@@ -12,12 +12,16 @@ import mimetypes
 from typing import Optional
 
 from langdetect import detect, LangDetectException
-
+import uuid
 import os
 from dotenv import load_dotenv
 import openai
 
 load_dotenv()  # Loads variables from .env
+
+
+
+
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -122,10 +126,14 @@ def assign_voice_to_speaker(speaker_id, voice_type, assigned_voices):
     # print(f"Assigned voice '{voice}' to speaker '{speaker_id}' (type: {voice_type})")
     return voice
 
-def generate_audio_from_pdf(scenario_id, pdf_url):
+from database import upload_audio_file_to_cloudinary
+def generate_audio_from_pdf(pdf_url):
+    chunk_files = []
+    local_audio_path = None
+    
     try:
         text = extract_text_from_pdf_url(pdf_url)
-        
+
         if not text:
             raise HTTPException(status_code=400, detail="No text found in PDF")
         
@@ -136,78 +144,83 @@ def generate_audio_from_pdf(scenario_id, pdf_url):
         
         audio_dir = Path("audio_files")
         audio_dir.mkdir(exist_ok=True)
+        cloudinary_unique_id = uuid.uuid4()
+        local_audio_path = audio_dir / f"{cloudinary_unique_id}.mp3"
         
-        local_audio_path = audio_dir / f"{scenario_id}.mp3"
+        # Generate audio chunks
+        for i, dialogue_item in enumerate(speaker_analysis["dialogue"]):
+            speaker_id = dialogue_item["speaker_id"]
+            text_content = dialogue_item["text"]
+            voice_type = dialogue_item["voice_type"]
+            
+            voice = assign_voice_to_speaker(speaker_id, voice_type, assigned_voices)
+            text_chunks = chunk_text(text_content, max_chars=4000)
+            
+            for j, chunk in enumerate(text_chunks):
+                response = client.audio.speech.create(
+                    model=config.OPENAI_TTS_MODEL,
+                    voice=voice,
+                    input=chunk
+                )
+                
+                chunk_id = uuid.uuid4()
+                chunk_path = audio_dir / f"chunk_{chunk_id}_speaker_{speaker_id}_{i}_{j}.mp3"
+                
+                with open(chunk_path, 'wb') as f:
+                    for chunk_bytes in response.iter_bytes():
+                        f.write(chunk_bytes)
+                
+                chunk_files.append(chunk_path)
         
-        chunk_files = []
-        try:
-            for i, dialogue_item in enumerate(speaker_analysis["dialogue"]):
-                speaker_id = dialogue_item["speaker_id"]
-                text_content = dialogue_item["text"]
-                voice_type = dialogue_item["voice_type"]
-                
-                voice = assign_voice_to_speaker(speaker_id, voice_type, assigned_voices)
-                
-                text_chunks = chunk_text(text_content, max_chars=4000)
-                
-                for j, chunk in enumerate(text_chunks):
-                    response = client.audio.speech.create(
-                        model=config.OPENAI_TTS_MODEL,
-                        voice=voice,
-                        input=chunk
-                    )
+        # Combine all chunks
+        all_audio_data = b''
+        for chunk_file in chunk_files:
+            with open(chunk_file, 'rb') as f:
+                all_audio_data += f.read()
         
-                    chunk_path = audio_dir / f"scenario_{scenario_id}_speaker_{speaker_id}_chunk_{i}_{j}.mp3"
-                    with open(chunk_path, 'wb') as f:
-                        for chunk in response.iter_bytes():
-                            f.write(chunk)
-                    chunk_files.append(chunk_path)
-            
-            all_audio_data = b''
-            for chunk_file in chunk_files:
-                with open(chunk_file, 'rb') as f:
-                    all_audio_data += f.read()
-            
-            with open(local_audio_path, 'wb') as f:
-                f.write(all_audio_data)
-            
-            for chunk_file in chunk_files:
+        with open(local_audio_path, 'wb') as f:
+            f.write(all_audio_data)
+        
+        # Remove individual chunks
+        for chunk_file in chunk_files:
+            if chunk_file.exists():
                 chunk_file.unlink()
-            
-            # print(f"Audio file saved locally at: {local_audio_path}")
+        chunk_files = []
+        
+        # Upload to Cloudinary
+        cloudinary_audio_unique_id = uuid.uuid4()
+        audio_url = upload_audio_file_to_cloudinary(str(local_audio_path), f"{cloudinary_audio_unique_id}")
+        # print("Uploaded to Cloudinary:", audio_url)
 
-            from database import upload_audio_file_to_cloudinary, upload_audio_url_to_db
-            
-            audio_url = upload_audio_file_to_cloudinary(str(local_audio_path), f"{scenario_id}")
+        if not audio_url:
+            raise HTTPException(status_code=500, detail="Failed to upload audio to Cloudinary")
 
-            if not audio_url:
-                raise HTTPException(status_code=500, detail="Failed to upload audio to Cloudinary")
+        if local_audio_path and local_audio_path.exists():
+            local_audio_path.unlink()
 
-            audio_format = local_audio_path.suffix.lstrip('.')
-            audio_size = local_audio_path.stat().st_size
-
-            
-            success = upload_audio_url_to_db(scenario_id, audio_url, audio_format, audio_size)
-            
-            if success:
-                local_audio_path.unlink()
-                return {
-                    "scenario_id": scenario_id,
-                    "cloudinary_url": audio_url,
-                }
-            else:
-                raise HTTPException(status_code=500, detail="Failed to store audio URL in database")
-                
-        except Exception as e:
-            for chunk_file in chunk_files:
-                if chunk_file.exists():
-                    chunk_file.unlink()
-            raise e
+        return {
+            "cloudinary_url": audio_url,
+        }
             
     except Exception as e:
+        # Cleanup on error
+        for chunk_file in chunk_files:
+            if chunk_file.exists():
+                chunk_file.unlink()
+        
+        if local_audio_path and local_audio_path.exists():
+            local_audio_path.unlink()
+            
         print(f"Audio generation from PDF failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
+
+# pdf_url = "https://res.cloudinary.com/dap77vbim/raw/upload/v1761799214/uploads/pdfs/pdf_1761799190791_nmz4zme3cj"
+
+# generate_audio_from_pdf(pdf_url)
+
+
 
 
 # from database import get_scenario_by_id, upload_submission_to_db
@@ -300,10 +313,10 @@ def transcribe_audio_from_url(audio_bytes: bytes):
 
 
 
-def process_pdf_for_instructions(scenario_id):
-    from database import get_pdfUrl_according_to_scenario
+def process_pdf_for_instructions(pdf_url):
+    # from database import get_pdfUrl_according_to_scenario
     
-    pdf_url = get_pdfUrl_according_to_scenario(scenario_id=scenario_id)
+    # pdf_url = get_pdfUrl_according_to_scenario(scenario_id=scenario_id)
     
     if not pdf_url:  # This check should raise an exception
         raise HTTPException(status_code=404, detail="Scenario not found or PDF URL missing")
@@ -354,6 +367,10 @@ def process_pdf_for_instructions(scenario_id):
         print(f"Failed to download PDF: {e}")
     except Exception as e:
         print(f"Processing failed: {e}")
+
+
+
+
 
 def report(transcription, instructions):
     client = openai.OpenAI(api_key=config.OPENAI_API_KEY)
