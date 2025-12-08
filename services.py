@@ -288,6 +288,9 @@ def transcribe_audio_from_url(audio_bytes: bytes):
             "Submission": transcription_dict.get("text", ""),
             "Seconds": transcription_dict.get("usage", {}).get("seconds", None)
         }
+        
+        # print()
+        # print(structured_output)
 
         return structured_output
 
@@ -312,6 +315,13 @@ def transcribe_audio_from_url(audio_bytes: bytes):
                 print(f"Failed to delete temp file: {e}")
 
 
+# with open("audio.mp3", "rb") as f:
+#     audio_bytes = f.read()
+
+# transcribe_audio_from_url(audio_bytes)
+
+
+
 
 def process_pdf_for_instructions(pdf_url):
     # from database import get_pdfUrl_according_to_scenario
@@ -324,11 +334,30 @@ def process_pdf_for_instructions(pdf_url):
 
     try:
         text = extract_text_from_pdf_url(pdf_url)
+        #print("Extracted PDF Text:", text)
+        # file = open(pdf_url, "rb")
+
+        # # Create reader
+        # reader = PyPDF2.PdfReader(file)
+
+        # # Extract text
+        # text = ""
+        # for page in reader.pages:
+        #     page_text = page.extract_text()
+        #     if page_text:
+        #         text += page_text + "\n"
+
+        # # Print the text
+        # print("text:",text)
+
+        # # Close the file
+        # file.close()
 
         # Step 4: Define system prompt
         system_prompt = (
             "You are an expert examiner. Read the instructions text and output a structured JSON. "
             "Each instruction should have: 'id', 'Instruction' and 'MaxMarks'. "
+            "For all the point in input text, make proper detailed instructions. "
             "If the mark is vague or in words like 'Maximum 15%', calculate and adjust marks so total is 100. "
             "Format the output as a JSON list."
         )
@@ -346,6 +375,7 @@ def process_pdf_for_instructions(pdf_url):
 
         # Get raw string output
         structured_output = response.choices[0].message.content
+        
 
         # --- Clean Markdown fences if present ---
         cleaned_output = structured_output.strip()
@@ -361,6 +391,9 @@ def process_pdf_for_instructions(pdf_url):
             print("Could not parse JSON. Saving raw text instead.")
             structured_output_json = cleaned_output
 
+        # print()
+        # print("stracture output:", structured_output_json)
+
         return structured_output_json
 
     except requests.RequestException as e:
@@ -368,6 +401,10 @@ def process_pdf_for_instructions(pdf_url):
     except Exception as e:
         print(f"Processing failed: {e}")
 
+
+
+
+# process_pdf_for_instructions("https://plastic-bronze-mkmwalo5bj-drkruz3krx.edgeone.dev/Scenario%201%20Marking%20Pointers%201.pdf")
 
 
 
@@ -408,21 +445,62 @@ def report(transcription, instructions):
         }
 
         response = client.chat.completions.create(
-            model="gpt-4o-mini",  # or gpt-4.1 if available
+            model="gpt-4.1",  # or gpt-4.1 if available
             messages=[prompt, user_input],
-            temperature=0.3
+            temperature=0
         )
 
         # Parse response text into JSON
+        raw_content = response.choices[0].message.content
+
+        # print()
+        # print(raw_content)
+
         try:
-            result = json.loads(response.choices[0].message.content)
-            results.append(result)
-        except Exception as e:
-            print("Error parsing response:", e)
-            continue
+            # First try direct JSON parsing
+            result = json.loads(raw_content)
+
+        except json.JSONDecodeError:
+            print("JSON parsing failed, trying to fix...")
+
+            # --- Attempt 1: Remove code fences ---
+            cleaned = raw_content.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("```", 1)[-1].strip()
+            if cleaned.endswith("```"):
+                cleaned = cleaned.rsplit("```", 1)[0].strip()
+
+            # --- Attempt 2: Attempt common JSON fixes ---
+            cleaned = cleaned.replace("\n", "")
+            cleaned = cleaned.replace("\t", "")
+            
+            # Add missing braces (common model mistakes)
+            if not cleaned.startswith("{"):
+                cleaned = "{" + cleaned
+            if not cleaned.endswith("}"):
+                cleaned = cleaned + "}"
+
+            try:
+                result = json.loads(cleaned)
+            except:
+                print("Unable to auto-fix JSON. Falling back to text mode.")
+
+                # --- Worst-case fallback ---
+                result = {
+                    "TotalScore": 0,
+                    "Positive": [],
+                    "Negative": ["Model returned invalid JSON for this chunk"],
+                    "Improvement": []
+                }
+
+        # Always append a result — NEVER skip a chunk
+        results.append(result)
+
 
     # Merge results into one final JSON
     final_result = merge_results(results)
+    # print()
+    # print("Final grading report:", final_result)
     return final_result
 
 def merge_results(results):
@@ -451,3 +529,50 @@ def merge_results(results):
         "Negative": negatives or None,
         "Improvement": improvements or None
     }
+
+
+# transcription_data = {
+#     "Submission": "Loading... Here's the Loading... Loading... Pressing Time. Loading... Pressing Time. I have now made the order as requested by the applicant for the extension of time for the filing of the defence. Your Honour, although the starting point is that the costs follow the event under CPR 44.2, the judge retains discretion. The application costs claimed by the applicant in the sum of £4,991 are set out in the Statement of Costs Unreasonable and Disproportionate. The use of the Grade A fee earner was not appropriate. The application was straightforward and could have been prepared in the hearing attended by a more junior fee earner. Grade C or Grade D would have been more appropriate. The time spent by the defendant, the applicant, was 10 hours for a straightforward application. This is excessive given the simplicity of the application, especially considering this is a Grade A fee earner. We would suggest a maximum of 5 hours in preparation of the application for a Grade C fee earner. Also the travel costs, the defendant's representative travelled 180 miles for the hearing. This was excessive. A local barrister could have been used instead. If the hearing is going to, if the court is going to allow travelling costs, the rate should be reduced perhaps to half of £141 per hour. An application cost in the region of between £1,500 to £2,000 would be much more reasonable. This is broken down as a Grade C fee earner at a rate of £177 per hour for 5 hours for the application when it comes to £885 plus a local barrister's fee in the sum of £400. So the total including VAT would be in the region of £1,500. You can see brother it says the negatives exceeded, submission exceeded the 5 minute time limit for our submissions. Makes no sense as I have just basically read out the whole of the contents of the marking so it should be 100%.",
+#     "Seconds": 214.0
+# }
+
+# instructions_data = [
+#     {
+#         "id": 1,
+#         "Instruction": "The student should refer to the Judge as 'your honour'. The student should speak clearly, at a measured pace and for no longer than 6 minutes.",
+#         "MaxMarks": 10
+#     },
+#     {
+#         "id": 2,
+#         "Instruction": "Although the starting point is that the costs follow the event CPR 44.2, the Judge retains discretion.",
+#         "MaxMarks": 10
+#     },
+#     {
+#         "id": 3,
+#         "Instruction": "The application costs claimed by the Applicant in the sum of £4991 as set out in their statement of costs are unreasonable and disproportionate.",
+#         "MaxMarks": 15
+#     },
+#     {
+#         "id": 4,
+#         "Instruction": "The use of a Grade A fee earner was not appropriate. The application was straightforward and could have been prepared and the hearing attended by a more junior fee-earner. Grade C or Grade D fee earner more appropriate.",
+#         "MaxMarks": 15
+#     },
+#     {
+#         "id": 5,
+#         "Instruction": "Time Spent – The Defendant claims 10 hours of work for a straightforward application. This is excessive given the simplicity of the application especially considering this is a Grade A fee earner. Maximum of 5 hours for a Grade C fee earner.",
+#         "MaxMarks": 15
+#     },
+#     {
+#         "id": 6,
+#         "Instruction": "Travel Costs – The Defendant’s representative travelled 180 miles for the hearing. This was excessive. A local Barrister could have been instructed instead. If the Court is going to allow the travelling costs, the rate should perhaps be reduced to half at £141 per hour.",
+#         "MaxMarks": 15
+#     },
+#     {
+#         "id": 7,
+#         "Instruction": "Application costs in the region of between £1500 to £2000 would be much more reasonable. This is broken down as a Grade C fee-earner at a rate of £177 per hour for 5 hours for the application which comes to £885 plus a local Barrister’s fee in the sum of £400. Total including VAT is in the region of £1500.",
+#         "MaxMarks": 20
+#     }
+# ]
+
+
+# report(transcription_data["Submission"], instructions_data)
