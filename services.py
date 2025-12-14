@@ -17,7 +17,10 @@ import os
 from dotenv import load_dotenv
 import openai
 
-load_dotenv()  # Loads variables from .env
+import subprocess          
+import imageio_ffmpeg
+
+load_dotenv()  # Loads variables from .env 
 
 
 
@@ -242,23 +245,47 @@ def generate_audio_from_pdf(pdf_url):
 ###########################################################################################
 
 
-def transcribe_audio_from_url(audio_bytes: bytes):
-    temp_audio_path = None
+def transcribe_audio_from_url(audio_bytes: bytes, file_format: str):
+    temp_original_path = None
+    temp_converted_path = None
+    
     try:
-        # Initialize OpenAI client
         client = openai.OpenAI(api_key=config.OPENAI_API_KEY)
 
-        # Save the binary audio to a temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
+        # 1. Save Original File
+        # We clean the extension to ensure it is valid
+        clean_ext = file_format.split('/')[-1].replace('.', '')
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{clean_ext}") as tmp_file:
             tmp_file.write(audio_bytes)
-            temp_audio_path = tmp_file.name
+            temp_original_path = tmp_file.name
 
-        # Transcribe audio
-        with open(temp_audio_path, "rb") as audio_file:
+        # 2. DEFINE OUTPUT PATH
+        temp_converted_path = temp_original_path + "_converted.mp3"
+
+        # 3. DIRECT CONVERSION (Bypassing pydub)
+        # We get the exact path to the ffmpeg.exe included in the python library
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        
+        print(f"Using FFmpeg at: {ffmpeg_exe}")
+
+        # Run the conversion command manually: ffmpeg -i input -y output
+        # -y means "overwrite if exists"
+        subprocess.run(
+            [ffmpeg_exe, "-i", temp_original_path, "-y", temp_converted_path],
+            check=True,
+            stdout=subprocess.DEVNULL, # Hide messy logs
+            stderr=subprocess.DEVNULL
+        )
+
+        # 4. Transcribe the CLEAN MP3
+        with open(temp_converted_path, "rb") as audio_file:
             transcription = client.audio.transcriptions.create(
                 model=config.OPENAI_TRANSCRIBE_MODEL,
                 file=audio_file,
-                response_format="json"
+                response_format="json",
+                language="en", # Hint to OpenAI to expect English
+                prompt="This is an English transcription." # Anti-hallucination prompt
             )
 
         # Convert transcription object to dict
@@ -270,18 +297,6 @@ def transcribe_audio_from_url(audio_bytes: bytes):
             raise HTTPException(status_code=400, detail="Transcription is empty or failed. Please upload a valid audio file.")
 
         
-        # try:
-        #     detected_lang = detect(text)
-        #     if detected_lang != "en":
-        #         raise HTTPException(
-        #             status_code=400,
-        #             detail=f"Detected non-English language: {detected_lang}. Please submit English audio."
-        #         )
-        # except LangDetectException:
-        #     raise HTTPException(
-        #         status_code=400,
-        #         detail="Unable to detect language. Please provide clear English audio."
-        #     )
 
         # Only keep desired structure
         structured_output = {
@@ -289,8 +304,8 @@ def transcribe_audio_from_url(audio_bytes: bytes):
             "Seconds": transcription_dict.get("usage", {}).get("seconds", None)
         }
         
-        # print()
-        # print(structured_output)
+        print()
+        print(structured_output)
 
         return structured_output
 
@@ -307,12 +322,13 @@ def transcribe_audio_from_url(audio_bytes: bytes):
         print(f"Transcription failed: {e}")
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
     finally:
-        # Clean up temp file
-        if temp_audio_path and os.path.exists(temp_audio_path):
-            try:
-                os.unlink(temp_audio_path)
-            except Exception as e:
-                print(f"Failed to delete temp file: {e}")
+        # ✅ Clean up BOTH files
+        for path in [temp_original_path, temp_converted_path]:
+            if path and os.path.exists(path):
+                try:
+                    os.unlink(path)
+                except Exception:
+                    pass
 
 
 # with open("audio.mp3", "rb") as f:
@@ -391,8 +407,8 @@ def process_pdf_for_instructions(pdf_url):
             print("Could not parse JSON. Saving raw text instead.")
             structured_output_json = cleaned_output
 
-        # print()
-        # print("stracture output:", structured_output_json)
+        print()
+        print("stracture output:", structured_output_json)
 
         return structured_output_json
 
@@ -408,12 +424,15 @@ def process_pdf_for_instructions(pdf_url):
 
 
 
+import json
+import openai
+# import config  # Ensure config with OPENAI_API_KEY is imported
 
 def report(transcription, instructions):
     client = openai.OpenAI(api_key=config.OPENAI_API_KEY)
 
     results = []
-    chunk_size = 3  # send instructions in chunks (tweak as needed)
+    chunk_size = 3  # Send instructions in chunks
 
     # Break the instructions into chunks
     for i in range(0, len(instructions), chunk_size):
@@ -424,15 +443,11 @@ def report(transcription, instructions):
             "content": (
                 "You are a grading assistant specialized in Legal Advocacy in the UK. "
                 "Evaluate a student's oral or written submission against the provided instructions in a fair, professional manner. "
-                "Return a JSON object with the following keys: "
-                "'TotalScore' (numeric, reflecting the overall performance), "
-                "'Positive' (optional list of points where the student followed instructions correctly), "
-                "'Negative' (optional list of points where the student failed to meet instructions), "
-                "and 'Improvement' (optional list of short, actionable suggestions to improve the submission). "
-                "If there are no relevant points for a list, you may omit it or leave it empty. "
+                # IMPORTANT: You must mention 'JSON' in the prompt for JSON mode to work
+                "Return a JSON object strictly following this structure: "
+                "{'TotalScore': int, 'Positive': [str], 'Negative': [str], 'Improvement': [str]}. "
                 "All text should be in clear UK English. "
-                "Do not include any explanations outside the JSON. "
-                "Keep feedback practical, concise, and directly tied to the instructions."
+                "Do not include any explanations outside the JSON."
             )
         }
 
@@ -444,65 +459,66 @@ def report(transcription, instructions):
             }, indent=2, ensure_ascii=False)
         }
 
-        response = client.chat.completions.create(
-            model="gpt-4.1",  # or gpt-4.1 if available
-            messages=[prompt, user_input],
-            temperature=0
-        )
+        # --- RETRY LOGIC STARTS HERE ---
+        max_retries = 3
+        attempt = 0
+        chunk_result = None
 
-        # Parse response text into JSON
-        raw_content = response.choices[0].message.content
-
-        # print()
-        # print(raw_content)
-
-        try:
-            # First try direct JSON parsing
-            result = json.loads(raw_content)
-
-        except json.JSONDecodeError:
-            print("JSON parsing failed, trying to fix...")
-
-            # --- Attempt 1: Remove code fences ---
-            cleaned = raw_content.strip()
-            if cleaned.startswith("```"):
-                cleaned = cleaned.split("```", 1)[-1].strip()
-            if cleaned.endswith("```"):
-                cleaned = cleaned.rsplit("```", 1)[0].strip()
-
-            # --- Attempt 2: Attempt common JSON fixes ---
-            cleaned = cleaned.replace("\n", "")
-            cleaned = cleaned.replace("\t", "")
-            
-            # Add missing braces (common model mistakes)
-            if not cleaned.startswith("{"):
-                cleaned = "{" + cleaned
-            if not cleaned.endswith("}"):
-                cleaned = cleaned + "}"
-
+        while attempt < max_retries:
             try:
-                result = json.loads(cleaned)
-            except:
-                print("Unable to auto-fix JSON. Falling back to text mode.")
+                # API Call with JSON Enforcement
+                response = client.chat.completions.create(
+                    model="gpt-4-turbo",  # MUST use gpt-4-turbo, gpt-4o, or gpt-3.5-turbo-0125 for JSON mode
+                    messages=[prompt, user_input],
+                    temperature=0,
+                    response_format={"type": "json_object"}  # <--- CRITICAL: Forces valid JSON
+                )
 
-                # --- Worst-case fallback ---
-                result = {
-                    "TotalScore": 0,
-                    "Positive": [],
-                    "Negative": ["Model returned invalid JSON for this chunk"],
-                    "Improvement": []
-                }
+                raw_content = response.choices[0].message.content
+                
+                # Parse JSON
+                result = json.loads(raw_content)
 
-        # Always append a result — NEVER skip a chunk
-        results.append(result)
+                # VALIDATION: Check if essential keys exist
+                if "TotalScore" in result:
+                    chunk_result = result
+                    # Success! Break the retry loop
+                    break  
+                else:
+                    print(f"Chunk {i}: Attempt {attempt+1} failed - Missing 'TotalScore'. Retrying...")
+                    attempt += 1
 
+            except json.JSONDecodeError:
+                print(f"Chunk {i}: Attempt {attempt+1} failed - Invalid JSON syntax. Retrying...")
+                attempt += 1
+            except Exception as e:
+                print(f"Chunk {i}: Attempt {attempt+1} failed - API Error: {e}. Retrying...")
+                attempt += 1
+        
+        # --- FALLBACK (Only if all 3 attempts fail) ---
+        if chunk_result is None:
+            print(f"CRITICAL: Failed to grade chunk {i} after {max_retries} attempts.")
+            chunk_result = {
+                "TotalScore": 0,
+                "Positive": [],
+                "Negative": ["System Error: Unable to grade this specific section due to repeated API failures."],
+                "Improvement": []
+            }
+
+        
+        results.append(chunk_result)
+        print()
+        print(result)
 
     # Merge results into one final JSON
     final_result = merge_results(results)
-    # print()
-    # print("Final grading report:", final_result)
+    print()
+    print(final_result)
+    
+    print("Final grading report generated.")
     return final_result
 
+# Helper function to merge results (remains same)
 def merge_results(results):
     def ensure_list(x):
         if isinstance(x, list):
@@ -529,7 +545,6 @@ def merge_results(results):
         "Negative": negatives or None,
         "Improvement": improvements or None
     }
-
 
 # transcription_data = {
 #     "Submission": "Loading... Here's the Loading... Loading... Pressing Time. Loading... Pressing Time. I have now made the order as requested by the applicant for the extension of time for the filing of the defence. Your Honour, although the starting point is that the costs follow the event under CPR 44.2, the judge retains discretion. The application costs claimed by the applicant in the sum of £4,991 are set out in the Statement of Costs Unreasonable and Disproportionate. The use of the Grade A fee earner was not appropriate. The application was straightforward and could have been prepared in the hearing attended by a more junior fee earner. Grade C or Grade D would have been more appropriate. The time spent by the defendant, the applicant, was 10 hours for a straightforward application. This is excessive given the simplicity of the application, especially considering this is a Grade A fee earner. We would suggest a maximum of 5 hours in preparation of the application for a Grade C fee earner. Also the travel costs, the defendant's representative travelled 180 miles for the hearing. This was excessive. A local barrister could have been used instead. If the hearing is going to, if the court is going to allow travelling costs, the rate should be reduced perhaps to half of £141 per hour. An application cost in the region of between £1,500 to £2,000 would be much more reasonable. This is broken down as a Grade C fee earner at a rate of £177 per hour for 5 hours for the application when it comes to £885 plus a local barrister's fee in the sum of £400. So the total including VAT would be in the region of £1,500. You can see brother it says the negatives exceeded, submission exceeded the 5 minute time limit for our submissions. Makes no sense as I have just basically read out the whole of the contents of the marking so it should be 100%.",

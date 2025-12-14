@@ -60,7 +60,8 @@ async def generate_audio_from_scenario_endpoint(request: AudioGenerationRequest)
 @app.post("/grade/evaluate-submission", response_model=EvaluationResponse)
 async def evaluate_submission_endpoint(
     pdf_url: str,
-    audio_file: UploadFile = File(...)
+    file_format: str,
+    audio_file: UploadFile = File(...) 
 ):
     """Evaluate uploaded audio submission against PDF instructions"""
     try:
@@ -71,15 +72,15 @@ async def evaluate_submission_endpoint(
         if not contents:
             raise HTTPException(status_code=400, detail="No audio file provided or file is empty")
 
-        transcription = transcribe_audio_from_url(contents)
-        isinstance = process_pdf_for_instructions(pdf_url)
+        transcription = transcribe_audio_from_url(contents, file_format)
+        instructions = process_pdf_for_instructions(pdf_url)
 
 
 
-        if not isinstance:
+        if not instructions:
             raise HTTPException(status_code=404, detail="No instructions found for scenario")
 
-        rep = report(transcription, isinstance)
+        rep = report(transcription, instructions)
 
         # Validate report structure using Pydantic
         grading_report = GradingReport(**rep)
