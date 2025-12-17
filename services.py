@@ -19,6 +19,7 @@ import openai
 
 import subprocess          
 import imageio_ffmpeg
+import requests
 
 load_dotenv()  # Loads variables from .env 
 
@@ -245,90 +246,81 @@ def generate_audio_from_pdf(pdf_url):
 ###########################################################################################
 
 
-def transcribe_audio_from_url(audio_bytes: bytes, file_format: str):
+def transcribe_audio_from_url(audio_url: str, file_format: str):
     temp_original_path = None
     temp_converted_path = None
-    
+
     try:
         client = openai.OpenAI(api_key=config.OPENAI_API_KEY)
 
-        # 1. Save Original File
-        # We clean the extension to ensure it is valid
+        # 1. DOWNLOAD AUDIO FROM URL
+        response = requests.get(audio_url, timeout=30)
+        response.raise_for_status()
+        audio_bytes = response.content
+
+        if not audio_bytes:
+            raise HTTPException(status_code=400, detail="Downloaded audio file is empty")
+
+        # 2. SAVE ORIGINAL FILE
         clean_ext = file_format.split('/')[-1].replace('.', '')
-        
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{clean_ext}") as tmp_file:
             tmp_file.write(audio_bytes)
             temp_original_path = tmp_file.name
 
-        # 2. DEFINE OUTPUT PATH
+        # 3. DEFINE OUTPUT PATH
         temp_converted_path = temp_original_path + "_converted.mp3"
 
-        # 3. DIRECT CONVERSION (Bypassing pydub)
-        # We get the exact path to the ffmpeg.exe included in the python library
+        # 4. CONVERT USING FFMPEG
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-        
-        print(f"Using FFmpeg at: {ffmpeg_exe}")
 
-        # Run the conversion command manually: ffmpeg -i input -y output
-        # -y means "overwrite if exists"
         subprocess.run(
             [ffmpeg_exe, "-i", temp_original_path, "-y", temp_converted_path],
             check=True,
-            stdout=subprocess.DEVNULL, # Hide messy logs
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
 
-        # 4. Transcribe the CLEAN MP3
+        # 5. TRANSCRIBE
         with open(temp_converted_path, "rb") as audio_file:
             transcription = client.audio.transcriptions.create(
                 model=config.OPENAI_TRANSCRIBE_MODEL,
                 file=audio_file,
                 response_format="json",
-                language="en", # Hint to OpenAI to expect English
-                prompt="This is an English transcription." # Anti-hallucination prompt
+                language="en",
+                prompt="This is an English transcription."
             )
 
-        # Convert transcription object to dict
         transcription_dict = transcription.model_dump()
         text = transcription_dict.get("text", "").strip()
 
-        # ✅ Empty check
         if not text:
-            raise HTTPException(status_code=400, detail="Transcription is empty or failed. Please upload a valid audio file.")
+            raise HTTPException(
+                status_code=400,
+                detail="Transcription is empty or failed. Please provide a valid audio file."
+            )
 
-        
-
-        # Only keep desired structure
         structured_output = {
-            "Submission": transcription_dict.get("text", ""),
-            "Seconds": transcription_dict.get("usage", {}).get("seconds", None)
+            "Submission": text,
+            "Seconds": transcription_dict.get("usage", {}).get("seconds")
         }
-        
-        print()
-        print(structured_output)
 
         return structured_output
 
     except HTTPException:
-        # Re-raise HTTPException so validation errors propagate
         raise
     except requests.RequestException as e:
-        print(f"Failed to download audio: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to download audio: {str(e)}")
-    except FileNotFoundError:
-        print(f"Audio file not found")
-        raise HTTPException(status_code=500, detail="Audio file not found")
     except Exception as e:
-        print(f"Transcription failed: {e}")
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
     finally:
-        # ✅ Clean up BOTH files
         for path in [temp_original_path, temp_converted_path]:
             if path and os.path.exists(path):
                 try:
                     os.unlink(path)
                 except Exception:
                     pass
+
 
 
 # with open("audio.mp3", "rb") as f:
@@ -407,8 +399,8 @@ def process_pdf_for_instructions(pdf_url):
             print("Could not parse JSON. Saving raw text instead.")
             structured_output_json = cleaned_output
 
-        print()
-        print("stracture output:", structured_output_json)
+        # print()
+        # print("stracture output:", structured_output_json)
 
         return structured_output_json
 
@@ -507,13 +499,13 @@ def report(transcription, instructions):
 
         
         results.append(chunk_result)
-        print()
-        print(result)
+        # print()
+        # print(result)
 
     # Merge results into one final JSON
     final_result = merge_results(results)
-    print()
-    print(final_result)
+    # print()
+    # print(final_result)
     
     print("Final grading report generated.")
     return final_result

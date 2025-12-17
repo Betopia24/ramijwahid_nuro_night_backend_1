@@ -60,19 +60,13 @@ async def generate_audio_from_scenario_endpoint(request: AudioGenerationRequest)
 @app.post("/grade/evaluate-submission", response_model=EvaluationResponse)
 async def evaluate_submission_endpoint(
     pdf_url: str,
-    file_format: str,
-    audio_file: UploadFile = File(...) 
+    audio_url: str,
+    file_format: str
 ):
     """Evaluate uploaded audio submission against PDF instructions"""
     try:
-        # Read uploaded file content
-        contents = await audio_file.read()
 
-        # Validate file existence and non-empty content
-        if not contents:
-            raise HTTPException(status_code=400, detail="No audio file provided or file is empty")
-
-        transcription = transcribe_audio_from_url(contents, file_format)
+        transcription = transcribe_audio_from_url(audio_url, file_format)
         instructions = process_pdf_for_instructions(pdf_url)
 
 
